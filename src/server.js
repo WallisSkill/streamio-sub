@@ -1,16 +1,22 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import { createReadStream } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { DEFAULT_CONFIG, decodeConfig, encodeConfig, normalizeConfig } from './config.js';
 import { findSubtitles } from './subtitles.js';
 import { SOURCE_BY_ID, SOURCE_INFO } from './sources/index.js';
 import { LANGS, langName } from './langs.js';
+import { MEDIA_DIR, fileByRel, findLocalStreams, hasMedia, mimeFor } from './media.js';
+import { getMeta, parseStremioId } from './meta.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const PORT = Number(process.env.PORT || 7000);
 const HOST = process.env.HOST || '0.0.0.0';
-const VERSION = '1.1.0';
+const VERSION = '1.2.0';
+
+// Tinh mot lan luc khoi dong: co thu muc media thi bat them resource `stream`.
+const MEDIA_ON = await hasMedia();
 
 const log = (...a) => console.log(new Date().toISOString(), ...a);
 
@@ -45,7 +51,11 @@ function manifest(cfg) {
     name: 'SubtitleCat+',
     description: `Phu de tu ${srcLabel}. Ngon ngu uu tien: ${label}.`,
     logo: 'https://www.subtitlecat.com/assets/images/cat.webp',
-    resources: ['subtitles'],
+    // Chi quang cao resource `stream` khi that su co thu muc media, tranh de Stremio
+    // goi mot endpoint luc nao cung rong.
+    resources: MEDIA_ON
+      ? ['subtitles', { name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] }]
+      : ['subtitles'],
     types: ['movie', 'series', 'other'],
     catalogs: [],
     behaviorHints: { configurable: true, configurationRequired: false }
@@ -150,8 +160,11 @@ export async function handleRequest(req, res) {
     const url = new URL(req.url, 'http://localhost');
     const segments = url.pathname.split('/').filter(Boolean);
 
-    if (segments[0] === 'health') return sendJson(res, 200, { ok: true, version: VERSION });
+    if (segments[0] === 'health') {
+      return sendJson(res, 200, { ok: true, version: VERSION, media: MEDIA_ON ? MEDIA_DIR : null });
+    }
     if (segments[0] === 'favicon.ico') return send(res, 204, '');
+    if (segments[0] === 'media' && segments[1]) return handleMediaFile(req, res, segments[1]);
 
     // Segment dau tien co the la config da ma hoa base64url.
     let cfg = normalizeConfig(DEFAULT_CONFIG);
@@ -173,6 +186,10 @@ export async function handleRequest(req, res) {
       return sendJson(res, 200, manifest(cfg), { 'Cache-Control': 'public, max-age=3600' });
     }
 
+    if (rest[0] === 'stream' && rest.length >= 3 && MEDIA_ON) {
+      return handleStream(req, res, rest[1], rest[rest.length - 1].replace(/\.json$/i, ''));
+    }
+
     if (rest[0] === 'subtitles' && rest.length >= 3) {
       const type = rest[1];
       const last = rest[rest.length - 1].replace(/\.json$/i, '');
@@ -186,6 +203,114 @@ export async function handleRequest(req, res) {
     log('unhandled', err);
     return sendJson(res, 500, { error: 'Internal error' });
   }
+}
+
+// token media = base64url(duong dan tuong doi trong MEDIA_DIR)
+const makeMediaToken = (rel) => Buffer.from(rel, 'utf8').toString('base64url');
+const readMediaToken = (t) => {
+  try {
+    return Buffer.from(t, 'base64url').toString('utf8');
+  } catch {
+    return null;
+  }
+};
+
+/**
+ * Doc header Range cua HTTP. Tra {start,end} da kep trong [0,size), hoac null neu khong co Range,
+ * hoac 'invalid' neu co Range nhung khong dung -> phai tra 416.
+ */
+export function parseRange(header, size) {
+  const raw = String(header || '').trim();
+  if (!raw) return null;
+  const m = /^bytes=(\d*)-(\d*)$/.exec(raw);
+  if (!m || (m[1] === '' && m[2] === '')) return 'invalid';
+  let start;
+  let end;
+  if (m[1] === '') {
+    const suffix = Number(m[2]); // "bytes=-500" = 500 byte cuoi
+    if (!Number.isFinite(suffix) || suffix <= 0) return 'invalid';
+    start = Math.max(0, size - suffix);
+    end = size - 1;
+  } else {
+    start = Number(m[1]);
+    end = m[2] === '' ? size - 1 : Number(m[2]);
+  }
+  if (!Number.isFinite(start) || !Number.isFinite(end) || start > end || start >= size) return 'invalid';
+  return { start, end: Math.min(end, size - 1) };
+}
+
+/** Phat file video local. Bat buoc ho tro Range, khong co thi Stremio khong tua duoc. */
+async function handleMediaFile(req, res, tokenSeg) {
+  const rel = readMediaToken(tokenSeg);
+  const file = rel ? await fileByRel(rel) : null;
+  if (!file) return send(res, 404, 'Not found', { 'Content-Type': 'text/plain; charset=utf-8' });
+
+  const size = file.size;
+  const range = parseRange(req.headers.range, size);
+  const base = {
+    'Content-Type': mimeFor(file.name),
+    'Accept-Ranges': 'bytes',
+    'Cache-Control': 'private, max-age=0'
+  };
+
+  if (range === 'invalid') {
+    return send(res, 416, '', { ...base, 'Content-Range': `bytes */${size}` });
+  }
+
+  const start = range ? range.start : 0;
+  const end = range ? range.end : size - 1;
+  const headers = {
+    ...base,
+    'Content-Length': String(end - start + 1),
+    ...(range ? { 'Content-Range': `bytes ${start}-${end}/${size}` } : {})
+  };
+
+  if (req.method === 'HEAD') return send(res, range ? 206 : 200, '', headers);
+
+  res.writeHead(range ? 206 : 200, {
+    'Access-Control-Allow-Origin': '*',
+    'Access-Control-Allow-Headers': '*',
+    'Access-Control-Allow-Methods': 'GET, HEAD, OPTIONS',
+    ...headers
+  });
+
+  const stream = createReadStream(file.full, { start, end });
+  stream.on('error', (err) => {
+    log('media stream error', file.rel, err.message);
+    res.destroy();
+  });
+  // Nguoi xem tua/dong player -> huy doc file, khong de stream chay tiep.
+  res.on('close', () => stream.destroy());
+  stream.pipe(res);
+}
+
+async function handleStream(req, res, type, rawId) {
+  const { imdbId, season, episode } = parseStremioId(decodeURIComponent(rawId));
+  const started = Date.now();
+  let found = [];
+  try {
+    const meta = imdbId ? await getMeta(type, imdbId) : null;
+    found = await findLocalStreams({ imdbId, season, episode, meta });
+  } catch (err) {
+    log('stream error', rawId, err.message);
+  }
+
+  const base = baseUrl(req);
+  const streams = found.map((f) => ({
+    name: f.hasVi ? 'Local · VI' : 'Local',
+    title: f.description,
+    description: f.description,
+    url: `${base}/media/${makeMediaToken(f.rel)}`,
+    behaviorHints: {
+      notWebReady: !f.webReady,
+      bingeGroup: `local-${imdbId || 'x'}`,
+      videoSize: f.size,
+      filename: f.name
+    }
+  }));
+
+  log(`stream ${type}/${rawId} -> ${streams.length} file (${Date.now() - started}ms)`);
+  return sendJson(res, 200, { streams, cacheMaxAge: 60 }, { 'Cache-Control': 'public, max-age=60' });
 }
 
 const server = http.createServer(handleRequest);

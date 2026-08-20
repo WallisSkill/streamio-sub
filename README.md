@@ -31,6 +31,58 @@ Biến môi trường:
 | `PORT` | `7000` | Cổng HTTP |
 | `HOST` | `0.0.0.0` | Địa chỉ bind |
 | `PUBLIC_URL` | *(tự suy ra từ header)* | Domain công khai khi deploy sau reverse proxy / Vercel / Render |
+| `MEDIA_DIR` | `./media` | Thư mục phim local để phát qua resource `stream` — xem mục dưới |
+| `MEDIA_TTL` | `60` | Số giây cache kết quả quét thư mục media |
+
+## Phát file local (để xem bản lồng tiếng Việt)
+
+Addon phụ đề **không thể** thêm track audio vào Stremio — protocol chỉ cho resource `subtitles` trả file `.srt`.
+Cách duy nhất để nghe lồng tiếng là track đó nằm sẵn trong file video. Nên addon có thêm resource `stream`
+phục vụ file video trong một thư mục local: bạn mux track tiếng Việt vào file bằng ffmpeg, bỏ vào thư mục đó,
+Stremio sẽ thấy nó ngay ở đúng trang phim và cho đổi track audio trong trình phát.
+
+Bật bằng cách trỏ `MEDIA_DIR` tới thư mục phim (mặc định là `./media`):
+
+```bash
+MEDIA_DIR=/duong/dan/toi/phim node src/server.js
+```
+
+Không có thư mục thì resource `stream` **không được quảng cáo** trong manifest, addon chạy y như cũ.
+
+### Đặt tên file
+
+| Cách | Độ tin cậy |
+|---|---|
+| Có `tt13642590` trong tên file hoặc tên thư mục | **Chắc chắn** — khớp tuyệt đối, đặt tên tiếng Việt thoải mái |
+| Không có id | Đối chiếu tên phim từ Cinemeta bằng chính bộ chấm điểm của addon — chỉ hợp với tên tiếng Anh |
+
+Phim bộ cần thêm tag tập (`S01E02`) trong tên. File nhỏ hơn 1 MB và file không phải video bị bỏ qua.
+Thư mục được quét đệ quy tối đa 4 cấp, kết quả cache 60 giây (đổi bằng `MEDIA_TTL`).
+
+Nếu máy có `ffprobe` (đi kèm ffmpeg), addon đọc luôn danh sách track audio và hiện trong Stremio
+(vd `2 track: jpn + vie`), file nào có track tiếng Việt được đẩy lên đầu và gắn nhãn `Local · VI`.
+Không có ffprobe thì đoán theo tên file (`LT`, `Lồng tiếng`, `Thuyết minh`, `VIE`…).
+
+### Mux track lồng tiếng vào file
+
+```bash
+ffmpeg -i video.mkv -i audio_vi.m4a -map 0:v -map 0:a -map 1:a -c copy -metadata:s:a:0 language=jpn -metadata:s:a:1 language=vie -disposition:a:1 default output.mkv
+```
+
+Nếu tiếng Việt bị trễ đều so với hình, thêm `-itsoffset 1.2` ngay trước `-i audio_vi.m4a`.
+Nếu đầu phim khớp mà càng về cuối càng lệch thì là chênh framerate (25fps PAL vs 23.976), phải kéo giãn audio trước:
+
+```bash
+ffmpeg -i audio_vi.m4a -filter:a "atempo=0.95904" -c:a aac -b:a 192k audio_fixed.m4a
+```
+
+### Bảo mật
+
+Route `/media/<token>` chỉ phục vụ **file đang có trong index** — token trỏ ra ngoài `MEDIA_DIR`,
+trỏ tới file chưa được quét, hay token rác đều trả 404. Có hỗ trợ HTTP Range đầy đủ
+(206, `bytes=a-b`, `bytes=a-`, `bytes=-n`, 416 khi vượt kích thước) nên tua trong Stremio hoạt động bình thường.
+
+Lưu ý: thư mục media chỉ có ý nghĩa khi tự host. Trên Vercel/serverless không có ổ đĩa cố định nên tính năng này tự tắt.
 
 ## Deploy lên Vercel
 
