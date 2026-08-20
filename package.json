@@ -1,0 +1,13 @@
+{
+  "name": "stremio-multisub",
+  "version": "1.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Stremio addon lay phu de tu nhieu nguon (SubtitleCat, OpenSubtitles, Subf2m, SubDL) - uu tien tieng Viet",
+  "engines": { "node": ">=18" },
+  "scripts": {
+    "start": "node src/server.js",
+    "smoke": "node scripts/smoke.js",
+    "test": "node --test test/*.test.js"
+  }
+}
