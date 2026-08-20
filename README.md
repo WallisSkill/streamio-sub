@@ -32,6 +32,19 @@ Biến môi trường:
 | `HOST` | `0.0.0.0` | Địa chỉ bind |
 | `PUBLIC_URL` | *(tự suy ra từ header)* | Domain công khai khi deploy sau reverse proxy / Vercel / Render |
 
+## Deploy lên Vercel
+
+Repo đã có sẵn `vercel.json` và `api/index.js`, deploy thẳng không cần cấu hình gì thêm:
+
+- Mọi request được rewrite về `api/index.js`, file này re-export `handleRequest` từ `src/server.js`,
+  nên chạy trên serverless **giống hệt** khi tự host bằng Node.
+- `includeFiles: "public/**"` là bắt buộc — không có nó, Vercel không đóng gói `configure.html` vào function và trang `/configure` sẽ lỗi 500.
+- Nhớ đặt biến môi trường `PUBLIC_URL=https://ten-mien-cua-ban`, vì link tải phụ đề trỏ về chính addon.
+
+Lưu ý: trên serverless, cache nằm trong RAM của từng instance nên mỗi lần cold start sẽ phải tải lại từ nguồn — chậm hơn lần đầu, không ảnh hưởng kết quả.
+
+Tự host bằng Node thì không cần hai file trên.
+
 ## Cài vào Stremio
 
 1. Mở `/configure`, chọn ngôn ngữ (Tiếng Việt đã được chọn sẵn) và các nguồn muốn bật.

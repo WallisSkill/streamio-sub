@@ -138,7 +138,11 @@ async function handleSubFile(res, tokenSeg, cfg) {
   }
 }
 
-const server = http.createServer(async (req, res) => {
+/**
+ * Bo xu ly mot request. Tach rieng khoi http.createServer de chay duoc ca tren
+ * serverless (Vercel/Lambda goi thang ham nay) lan server Node thuong.
+ */
+export async function handleRequest(req, res) {
   try {
     if (req.method === 'OPTIONS') return send(res, 204, '');
     if (req.method !== 'GET' && req.method !== 'HEAD') return send(res, 405, 'Method not allowed');
@@ -182,7 +186,9 @@ const server = http.createServer(async (req, res) => {
     log('unhandled', err);
     return sendJson(res, 500, { error: 'Internal error' });
   }
-});
+}
+
+const server = http.createServer(handleRequest);
 
 const isMain = process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
 if (isMain) {
@@ -195,3 +201,6 @@ if (isMain) {
 }
 
 export { server, manifest, makeToken, readToken };
+
+// Vercel/Lambda doc default export cua file nay; phai la mot ham hoac mot http.Server.
+export default handleRequest;
