@@ -71,7 +71,13 @@
   </div>
 
   <div class="card">
-    <h2>3. Tuy chon</h2>
+    <h2>3. Xem hop phap o dau</h2>
+    <p class="hint">Hien them muc "Xem tren ..." trong tab Streams cua phim, bam vao se mo app/trang cua nen tang do &ndash; dung khi ban muon xem ban long tieng chinh chu. Bo chon het la tat han.</p>
+    <div class="grid" id="platforms" style="max-height:none"></div>
+  </div>
+
+  <div class="card">
+    <h2>4. Tuy chon</h2>
     <p class="hint">De mac dinh neu ban khong chac.</p>
     <div class="row">
       <label>So phu de toi da tra ve
@@ -86,7 +92,7 @@
   </div>
 
   <div class="card">
-    <h2>4. Cai dat</h2>
+    <h2>5. Cai dat</h2>
     <div class="url">
       <input type="text" id="manifestUrl" readonly>
       <button class="btn ghost" id="copy">Sao chep</button>
@@ -108,12 +114,15 @@
 <script>
 const LANGS = __LANGS__;
 const SOURCES = __SOURCES__;
+const PLATFORMS = __PLATFORMS__;
 const CONFIG = __CONFIG__;
 const DEFAULTS = __DEFAULT_CONFIG__;
 const BASE = "__BASE__";
 
 let selected = (CONFIG.langs && CONFIG.langs.length ? CONFIG.langs : DEFAULTS.langs).slice();
 let sources = (CONFIG.sources && CONFIG.sources.length ? CONFIG.sources : DEFAULTS.sources).slice();
+// Mang rong la lua chon hop le (tat han), nen khong fallback ve mac dinh nhu `sources`.
+let links = (Array.isArray(CONFIG.links) ? CONFIG.links : DEFAULTS.links).slice();
 const keys = { osApiKey: CONFIG.osApiKey || '', subdlApiKey: CONFIG.subdlApiKey || '' };
 
 const KEY_HELP = {
@@ -138,6 +147,7 @@ function currentConfig(){
   return {
     langs: selected.length ? selected : DEFAULTS.langs.slice(),
     sources: sources.length ? sources : DEFAULTS.sources.slice(),
+    links: links,
     limit: Math.min(30, Math.max(1, Number($('limit').value) || DEFAULTS.limit)),
     scan: Math.min(12, Math.max(1, Number($('scan').value) || DEFAULTS.scan)),
     showRelease: $('showRelease').checked,
@@ -228,10 +238,29 @@ function updateUrl(){
   $('preview').href = url;
 }
 
+function renderPlatforms(){
+  const box = $('platforms');
+  box.innerHTML = '';
+  PLATFORMS.forEach(p => {
+    const on = links.includes(p.id);
+    const el = document.createElement('div');
+    el.className = 'lang' + (on ? ' on' : '');
+    el.innerHTML = '<input type="checkbox" ' + (on ? 'checked' : '') + '><span>' + p.name + '</span><code>' + p.region + '</code>';
+    el.onclick = (e) => {
+      e.preventDefault();
+      const i = links.indexOf(p.id);
+      if(i >= 0) links.splice(i,1); else links.push(p.id);
+      render();
+    };
+    box.appendChild(el);
+  });
+}
+
 function render(){
   renderChips();
   renderGrid();
   renderSources();
+  renderPlatforms();
   updateUrl();
 }
 

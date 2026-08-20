@@ -1,9 +1,11 @@
 import { LANG_BY_CODE } from './langs.js';
 import { SOURCE_BY_ID } from './sources/index.js';
+import { PLATFORM_BY_ID } from './links.js';
 
 export const DEFAULT_CONFIG = Object.freeze({
   langs: ['vi'], // uu tien tieng Viet
   sources: ['subtitlecat', 'opensubtitles', 'subf2m'], // cac nguon khong can API key
+  links: ['galaxyplay', 'vieon', 'fptplay', 'netflix'], // nen tang xem hop phap hien trong tab Streams
   limit: 10, // so phu de toi da tra ve
   scan: 6, // so trang chi tiet SubtitleCat se mo de tim
   showRelease: false, // hien ten ban release canh ten ngon ngu
@@ -35,6 +37,13 @@ export function normalizeConfig(raw) {
     .map((s) => String(s).trim())
     .filter((s) => SOURCE_BY_ID.has(s) && !seenSrc.has(s) && seenSrc.add(s));
   if (!cfg.sources.length) cfg.sources = [...DEFAULT_CONFIG.sources];
+
+  // links: mang rong la hop le (nguoi dung tat han tinh nang), nen khong fallback ve mac dinh.
+  const rawLinks = Array.isArray(cfg.links) ? cfg.links : String(cfg.links || '').split(',');
+  const seenLink = new Set();
+  cfg.links = rawLinks
+    .map((s) => String(s).trim())
+    .filter((s) => PLATFORM_BY_ID.has(s) && !seenLink.has(s) && seenLink.add(s));
 
   cfg.limit = clamp(cfg.limit, 1, 30, DEFAULT_CONFIG.limit);
   cfg.scan = clamp(cfg.scan, 1, 12, DEFAULT_CONFIG.scan);

@@ -33,6 +33,57 @@ Biến môi trường:
 | `PUBLIC_URL` | *(tự suy ra từ header)* | Domain công khai khi deploy sau reverse proxy / Vercel / Render |
 | `MEDIA_DIR` | `./media` | Thư mục phim local để phát qua resource `stream` — xem mục dưới |
 | `MEDIA_TTL` | `60` | Số giây cache kết quả quét thư mục media |
+| `LINKS_FILE` | `./links.json` | File ghim link nền tảng + tên tiếng Việt |
+
+## Link "xem hợp pháp ở đâu"
+
+Trong tab Streams của mỗi phim, addon thêm các mục `▶ Galaxy Play`, `▶ VieON`, `▶ FPT Play`, `▶ Netflix`…
+Bấm vào sẽ mở app/trang của nền tảng đó — dùng khi bạn muốn xem bản lồng tiếng chính chủ thay vì phụ đề dịch máy.
+
+Chọn nền tảng trong `/configure`. Bỏ chọn hết là tắt hẳn, khi đó resource `stream` không được quảng cáo nữa.
+
+| Nền tảng | Khu vực | URL tìm kiếm (đã kiểm tra trả 200) |
+|---|---|---|
+| Galaxy Play | VN | `galaxyplay.vn/search?q=` |
+| VieON | VN | `vieon.vn/tim-kiem?q=` |
+| FPT Play | VN | `fptplay.vn/tim-kiem?keyword=` |
+| TV360 | VN | `tv360.vn/search?q=` |
+| POPS | VN | `pops.vn/search?q=` |
+| Netflix | global | `netflix.com/search?q=` |
+| Prime Video | global | `primevideo.com/search?phrase=` |
+| Apple TV | global | `tv.apple.com/vn/search?term=` |
+
+### Ghim link chính xác bằng `links.json`
+
+Mặc định addon tìm theo tên phim từ Cinemeta — mà tên đó là **tiếng Anh**, nên tìm trên nền tảng VN thường ra rỗng.
+File `links.json` ở thư mục gốc cho phép ghim tên tiếng Việt và link phim trực tiếp:
+
+```json
+{
+  "tt13642590": {
+    "title": "Shin Cậu Bé Bút Chì: Bí Ẩn! Học Viện Hoa Lệ Tenkasu",
+    "galaxyplay": "https://galaxyplay.vn/title/shin-cau-be-but-chi-bi-an-hoc-vien-hoa-le-tenkasu"
+  }
+}
+```
+
+`title` dùng cho mọi nền tảng chưa được ghim link. Đổi đường dẫn file bằng `LINKS_FILE`, sửa xong có hiệu lực sau 60 giây.
+
+Link ghim bị **kiểm tra tên miền**: phải là `https` và phải đúng tên miền của nền tảng đó.
+`https://evil.com/x`, `http://vieon.vn/x`, `https://galaxyplay.vn.evil.com/x` đều bị bỏ và tự quay về link tìm kiếm —
+để một file `links.json` bị sửa bậy không biến addon thành open redirect.
+
+### Trên TV
+
+- `externalUrl` giữ nguyên **link gốc của nền tảng**, không đi vòng qua addon — để app trên Android TV còn cơ hội bắt được bằng deep link.
+- Phần mô tả của mỗi mục hiện một **URL rút gọn** dạng `http://<addon>/go/galaxyplay/tt13642590`.
+  Link tìm kiếm tiếng Việt sau khi percent-encode dài tới ~200 ký tự, không đọc nổi trên màn hình TV;
+  dạng rút gọn này đọc và gõ tay được bằng điện thoại. Route `/go/` dựng lại link từ `links.json` + Cinemeta rồi trả `302`.
+
+**Chưa kiểm chứng được:** mình không có TV để test. Trên Android TV, `externalUrl` mở qua `Intent.ACTION_VIEW`,
+nên chỉ nhảy thẳng vào app khi app đó khai báo deep link cho tên miền tương ứng (Netflix có; các app VN thì chưa rõ).
+Máy nào không có trình duyệt và không app nào nhận link thì mục đó sẽ không mở được — lúc ấy phải dùng URL rút gọn ở phần mô tả.
+Trên Stremio Web và Stremio desktop thì link mở tab mới bình thường.
 
 ## Phát file local (để xem bản lồng tiếng Việt)
 

@@ -8,6 +8,7 @@ import { findSubtitles } from './subtitles.js';
 import { SOURCE_BY_ID, SOURCE_INFO } from './sources/index.js';
 import { LANGS, langName } from './langs.js';
 import { MEDIA_DIR, fileByRel, findLocalStreams, hasMedia, mimeFor } from './media.js';
+import { PLATFORM_INFO, buildLinks } from './links.js';
 import { getMeta, parseStremioId } from './meta.js';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
@@ -51,11 +52,12 @@ function manifest(cfg) {
     name: 'SubtitleCat+',
     description: `Phu de tu ${srcLabel}. Ngon ngu uu tien: ${label}.`,
     logo: 'https://www.subtitlecat.com/assets/images/cat.webp',
-    // Chi quang cao resource `stream` khi that su co thu muc media, tranh de Stremio
-    // goi mot endpoint luc nao cung rong.
-    resources: MEDIA_ON
-      ? ['subtitles', { name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] }]
-      : ['subtitles'],
+    // Chi quang cao resource `stream` khi co thu muc media hoac co bat link nen tang,
+    // tranh de Stremio goi mot endpoint luc nao cung rong.
+    resources:
+      MEDIA_ON || cfg.links.length
+        ? ['subtitles', { name: 'stream', types: ['movie', 'series'], idPrefixes: ['tt'] }]
+        : ['subtitles'],
     types: ['movie', 'series', 'other'],
     catalogs: [],
     behaviorHints: { configurable: true, configurationRequired: false }
@@ -94,6 +96,7 @@ async function configurePage(req, cfg) {
   return html
     .replace('__LANGS__', JSON.stringify(LANGS))
     .replace('__SOURCES__', JSON.stringify(SOURCE_INFO))
+    .replace('__PLATFORMS__', JSON.stringify(PLATFORM_INFO))
     .replace('__CONFIG__', JSON.stringify(cfg))
     .replace('__DEFAULT_CONFIG__', JSON.stringify(DEFAULT_CONFIG))
     .replace(/__BASE__/g, baseUrl(req));
@@ -165,6 +168,10 @@ export async function handleRequest(req, res) {
     }
     if (segments[0] === 'favicon.ico') return send(res, 204, '');
     if (segments[0] === 'media' && segments[1]) return handleMediaFile(req, res, segments[1]);
+    if (segments[0] === 'go' && segments[1] && segments[2]) {
+      const id = segments[2];
+      return handleGo(req, res, segments[1], id, id.includes(':') ? 'series' : 'movie');
+    }
 
     // Segment dau tien co the la config da ma hoa base64url.
     let cfg = normalizeConfig(DEFAULT_CONFIG);
@@ -186,8 +193,8 @@ export async function handleRequest(req, res) {
       return sendJson(res, 200, manifest(cfg), { 'Cache-Control': 'public, max-age=3600' });
     }
 
-    if (rest[0] === 'stream' && rest.length >= 3 && MEDIA_ON) {
-      return handleStream(req, res, rest[1], rest[rest.length - 1].replace(/\.json$/i, ''));
+    if (rest[0] === 'stream' && rest.length >= 3 && (MEDIA_ON || cfg.links.length)) {
+      return handleStream(req, res, cfg, rest[1], rest[rest.length - 1].replace(/\.json$/i, ''));
     }
 
     if (rest[0] === 'subtitles' && rest.length >= 3) {
@@ -284,18 +291,42 @@ async function handleMediaFile(req, res, tokenSeg) {
   stream.pipe(res);
 }
 
-async function handleStream(req, res, type, rawId) {
+/**
+ * Redirect ngan: /go/<nen-tang>/<imdbId>. Dung cho TV - URL tim kiem tieng Viet sau khi
+ * encode dai ~200 ky tu, khong doc noi tren man hinh; dang nay ngan va go tay duoc.
+ * Khong luu map trong RAM: link duoc dung lai tu links.json + Cinemeta moi lan goi.
+ */
+async function handleGo(req, res, platformId, rawId, type) {
+  const { imdbId } = parseStremioId(decodeURIComponent(rawId));
+  if (!imdbId) return send(res, 404, 'Not found', { 'Content-Type': 'text/plain; charset=utf-8' });
+  try {
+    const meta = await getMeta(type, imdbId);
+    const [link] = await buildLinks({ imdbId, meta, config: { links: [platformId] } });
+    if (!link) return send(res, 404, 'Khong co nen tang nay', { 'Content-Type': 'text/plain; charset=utf-8' });
+    return send(res, 302, '', { Location: link.url, 'Cache-Control': 'public, max-age=3600' });
+  } catch (err) {
+    log('go error', platformId, rawId, err.message);
+    return send(res, 502, 'Loi dung link', { 'Content-Type': 'text/plain; charset=utf-8' });
+  }
+}
+
+async function handleStream(req, res, cfg, type, rawId) {
   const { imdbId, season, episode } = parseStremioId(decodeURIComponent(rawId));
   const started = Date.now();
   let found = [];
+  let links = [];
   try {
     const meta = imdbId ? await getMeta(type, imdbId) : null;
-    found = await findLocalStreams({ imdbId, season, episode, meta });
+    [found, links] = await Promise.all([
+      MEDIA_ON ? findLocalStreams({ imdbId, season, episode, meta }) : [],
+      buildLinks({ imdbId, meta, config: cfg })
+    ]);
   } catch (err) {
     log('stream error', rawId, err.message);
   }
 
   const base = baseUrl(req);
+  // File phat duoc dat truoc, link mo ngoai dat sau.
   const streams = found.map((f) => ({
     name: f.hasVi ? 'Local · VI' : 'Local',
     title: f.description,
@@ -309,8 +340,26 @@ async function handleStream(req, res, type, rawId) {
     }
   }));
 
-  log(`stream ${type}/${rawId} -> ${streams.length} file (${Date.now() - started}ms)`);
-  return sendJson(res, 200, { streams, cacheMaxAge: 60 }, { 'Cache-Control': 'public, max-age=60' });
+  for (const l of links) {
+    const note = l.pinned ? 'mo thang trang phim' : `tim theo ten: ${l.title}`;
+    // Mo ta hien URL RUT GON qua chinh addon - tren TV khong co trinh duyet thi van doc
+    // va go tay duoc; link tim kiem tieng Viet sau khi encode dai toi ~200 ky tu.
+    const short = `${base}/go/${l.id}/${imdbId || ''}`;
+    const text = `Xem tren ${l.name}\n${note}\n${imdbId ? short : l.url}`;
+    streams.push({
+      name: `▶ ${l.name}`,
+      title: text,
+      description: text,
+      // externalUrl giu nguyen link goc cua nen tang, khong di vong qua addon:
+      // co the vay app tren Android TV moi bat duoc bang deep link.
+      externalUrl: l.url
+    });
+  }
+
+  log(
+    `stream ${type}/${rawId} -> ${found.length} file + ${links.length} link (${Date.now() - started}ms)`
+  );
+  return sendJson(res, 200, { streams, cacheMaxAge: 3600 }, { 'Cache-Control': 'public, max-age=3600' });
 }
 
 const server = http.createServer(handleRequest);
